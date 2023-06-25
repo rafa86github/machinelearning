@@ -1,0 +1,377 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sbn  #统计图形绘制
+import warnings
+warnings.filterwarnings("ignore")
+
+from sklearn.linear_model import LinearRegression  #多元线性回归模型
+from sklearn.ensemble import RandomForestRegressor #随机森林回归模型
+import lightgbm as lgb                             #LGB模型回归
+
+from sklearn.model_selection import train_test_split  #切分数据
+from sklearn.metrics import mean_absolute_error       #评价指标
+from sklearn.metrics import mean_squared_error
+
+#获取数据
+train_data_file="zhengqi_train.txt"
+test_data_file="zhengqi_test.txt"
+train_data=pd.read_csv(train_data_file,sep='\t',encoding='utf-8')
+test_data=pd.read_csv(test_data_file,sep='\t',encoding='utf-8')
+
+#绘制KDE图
+plt.figure(figsize=(20,50),dpi=100)
+for i in range(38):
+    plt.subplot(10,4,i+1)
+    sbn.distplot(train_data.iloc[:,i], color='green')
+    sbn.distplot(test_data.iloc[:,i], color='red')
+    plt.legend(['Train','Test'])
+plt.tight_layout()
+
+# 删除训练集和测试集的特征差异较大的
+train_data_X_new = train_data.drop(['V2','V5','V9','V11','V13','V14','V17','V19','V20','V21','V22','V27'], axis = 1)
+test_data_new = test_data.drop(['V2','V5','V9','V11','V13','V14','V17','V19','V20','V21','V22','V27'], axis = 1)
+all_data_X = pd.concat([train_data_X_new,test_data_new])
+
+# 异常值处理
+plt.figure(figsize=(18,10))
+plt.boxplot(x=train_data.values, labels=train_data.columns )
+plt.hlines([-7.5,7.5], 0, 40, colors='red')    # 上下界限
+
+#  删除异常值
+train_data=train_data[train_data['V9']>-7.5]
+test_data=test_data[test_data['V9']>-9.5]
+
+#  归一化处理
+from sklearn import preprocessing
+
+feature_columns = [col for col in test_data.columns]
+min_max_scaler = preprocessing.MinMaxScaler()
+train_data_scaler = min_max_scaler.fit_transform(train_data[feature_columns])   # 进行标准化处理
+test_data_scaler = min_max_scaler.fit_transform(test_data[feature_columns])
+
+train_data_scaler = pd.DataFrame(train_data_scaler)  # 数组转换成表格
+train_data_scaler.columns = feature_columns
+test_data_scaler = pd.DataFrame(test_data_scaler)
+test_data_scaler.columns = feature_columns
+
+train_data_scaler['target']=train_data['target']
+
+#  特征相关性
+plt.figure(figsize=(20,16))
+column = train_data_scaler.columns
+
+mcorr = train_data_scaler[column].corr(method='spearman')  # 相关性
+
+# 特征降维 (相关性筛选)
+mcorr = mcorr.abs()
+numerical_corr = mcorr[mcorr['target']>0.1]['target']   # 筛选>0.1的特征变量, 并只显示特征变量
+numerical_corr.sort_values(ascending=False)  # 从大到小排序
+
+#  PCA 处理    （除去数据的多重共线性）
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=0.9)   # 保持90%的信息
+
+new_train_pca = pca.fit_transform(train_data_scaler.iloc[:,0:-1])
+new_test_pca = pca.fit_transform(test_data_scaler)
+
+pca = PCA(n_components=16)
+new_train_pca_16 = pca.fit_transform(train_data_scaler.iloc[:,0:-1])
+new_train_pca_16 = pd.DataFrame(new_train_pca_16)
+new_test_pca_16 = pca.fit_transform(test_data_scaler)
+new_test_pca_16 = pd.DataFrame(new_test_pca_16)
+new_train_pca_16['target']=train_data_scaler['target']
+
+# 用PCA保留16维特征数据
+new_train_pca_16 = new_train_pca_16.fillna(0)
+train = new_train_pca_16[new_test_pca_16.columns]
+target = train_data['target']
+
+# 划分数据
+train_data,test_data,train_target, test_target = train_test_split(train,target, test_size=0.2, random_state=0)
+
+# 多元线性回归
+clf = LinearRegression()
+clf.fit(train_data, train_target)
+mse = mean_absolute_error(test_target, clf.predict(test_data))
+linear_predict = clf.predict(test_data)
+
+# LGB模型回归
+clf2 = lgb.LGBMRegressor(learning_rate=0.01,
+                       max_depth=-1,
+                       n_estimators=5000,
+                       boosting_type='gbdt',
+                       random_state=2022,
+                       objective='regression')
+clf2.fit(X=train_data, y=train_target,eval_metric='MSE',verbose=50)
+mse2 = mean_absolute_error(test_target, clf2.predict(test_data))
+LGB_predict = clf2.predict(test_data)
+
+# 随机森林回归
+clf = RandomForestRegressor(n_estimators=400)
+clf.fit(train_data,train_target)
+mse3 = mean_absolute_error(test_target, clf.predict(test_data))
+
+print('多元线性回归的测试集的MSE得分为：{}'.format(mse))
+print('LGB模型回归的测试集的MSE得分为：{}'.format(mse2))
+print('随机森林回归的测试集的MSE得分为：{}'.format(mse3))
+
+#使用数据训练随机森林模型，采用网格搜索方法调参
+from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+
+train_data, test_data, train_target, test_target = train_test_split(train, target, test_size=0.2, random_state=0)
+randomForestRegression = RandomForestRegressor()
+parameters = {'n_estimators':[50,100,200], 'max_depth':[1,2,3]}
+clf = GridSearchCV(randomForestRegression, parameters, cv=5)
+clf.fit(train_data, train_target)
+score_test = mean_squared_error(test_target, clf.predict(test_data))
+
+print('调参后的随机森林回归的训练集得分：{}'.format(clf.score(train_data,train_target)))
+print('调参后的随机森林回归的测试集得分：{}'.format(clf.score(test_data,test_target)))
+print("随机森林模型调参前MSE：{}".format(mse))
+print("随机森林模型调参后MSE：{}".format(score_test))
+
+# 使用数据训练随机森林模型，采用随机参数优化方法调参
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+
+train_data, test_data, train_target, test_target =train_test_split(train, target, test_size=0.2, random_state=0)
+randomForestRegressior = RandomForestRegressor()
+parameters = {'n_estimators':[50, 100, 200, 300], 'max_depth':[1,2,3,4,5]}
+clf = RandomizedSearchCV(randomForestRegressior, parameters, cv=5)
+clf.fit(train_data, train_target)
+score_test = mean_squared_error(test_target, clf.predict(test_data))
+
+print('调参后的随机森林回归的训练集得分：{}'.format(clf.score(train_data,train_target)))
+print('调参后的随机森林回归的测试集得分：{}'.format(clf.score(test_data,test_target)))
+print("随机森林模型调参前MSE：{}".format(mse))
+print("随机森林模型调参后MSE：{}".format(score_test))
+
+# lgb模型调参
+clf = lgb.LGBMRegressor(num_leaves=31)
+parameters = {'learning_rate':[0.01,0.1,1],'n_estimators':[20,40]}
+clf= GridSearchCV(clf, parameters, cv=5)
+clf.fit(train_data, train_target)
+score_test = mean_squared_error(test_target, clf.predict(test_data))
+RandomForest_predict = clf.predict(test_data)
+
+print('调参后的LGB的训练集得分：{}'.format(clf.score(train_data,train_target)))
+print('调参后的LGB的测试集得分：{}'.format(clf.score(test_data,test_target)))
+print("LGB模型调参前MSE：{}".format(mse))
+print("LGB模型调参后MSE：{}".format(score_test))
+
+# 3个模型融合
+def model_mix(pred_1, pred_2, pred_3):
+    result = pd.DataFrame(columns=['多元线性回归', 'LGB模型回归', '随机森林回归', '融合MSE'])
+
+    for a in range(40):
+        for b in range(40):
+            for c in range(1,40):
+                test_pred = (a * pred_1 + b * pred_2 + c * pred_3) / (a + b + c)
+
+                mse = mean_squared_error(test_target, test_pred)
+
+                result = result.append([{'多元线性回归': a,
+                                         'LGB模型回归': b,
+                                         '随机森林回归': c,
+                                         '融合MSE': mse}],
+                                       ignore_index=True)
+    return result
+
+
+model_combine = model_mix(linear_predict, LGB_predict, RandomForest_predict)
+
+model_combine.sort_values(by='融合MSE', inplace=True)
+print(model_combine.head())
+model_combine.to_csv('result.csv',index=0)import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sbn  #统计图形绘制
+import warnings
+warnings.filterwarnings("ignore")
+
+from sklearn.linear_model import LinearRegression  #多元线性回归模型
+from sklearn.ensemble import RandomForestRegressor #随机森林回归模型
+import lightgbm as lgb                             #LGB模型回归
+
+from sklearn.model_selection import train_test_split  #切分数据
+from sklearn.metrics import mean_absolute_error       #评价指标
+from sklearn.metrics import mean_squared_error
+
+#获取数据
+train_data_file="zhengqi_train.txt"
+test_data_file="zhengqi_test.txt"
+train_data=pd.read_csv(train_data_file,sep='\t',encoding='utf-8')
+test_data=pd.read_csv(test_data_file,sep='\t',encoding='utf-8')
+
+#绘制KDE图
+plt.figure(figsize=(20,50),dpi=100)
+for i in range(38):
+    plt.subplot(10,4,i+1)
+    sbn.distplot(train_data.iloc[:,i], color='green')
+    sbn.distplot(test_data.iloc[:,i], color='red')
+    plt.legend(['Train','Test'])
+plt.tight_layout()
+
+# 删除训练集和测试集的特征差异较大的
+train_data_X_new = train_data.drop(['V2','V5','V9','V11','V13','V14','V17','V19','V20','V21','V22','V27'], axis = 1)
+test_data_new = test_data.drop(['V2','V5','V9','V11','V13','V14','V17','V19','V20','V21','V22','V27'], axis = 1)
+all_data_X = pd.concat([train_data_X_new,test_data_new])
+
+# 异常值处理
+plt.figure(figsize=(18,10))
+plt.boxplot(x=train_data.values, labels=train_data.columns )
+plt.hlines([-7.5,7.5], 0, 40, colors='red')    # 上下界限
+
+#  删除异常值
+train_data=train_data[train_data['V9']>-7.5]
+test_data=test_data[test_data['V9']>-9.5]
+
+#  归一化处理
+from sklearn import preprocessing
+
+feature_columns = [col for col in test_data.columns]
+min_max_scaler = preprocessing.MinMaxScaler()
+train_data_scaler = min_max_scaler.fit_transform(train_data[feature_columns])   # 进行标准化处理
+test_data_scaler = min_max_scaler.fit_transform(test_data[feature_columns])
+
+train_data_scaler = pd.DataFrame(train_data_scaler)  # 数组转换成表格
+train_data_scaler.columns = feature_columns
+test_data_scaler = pd.DataFrame(test_data_scaler)
+test_data_scaler.columns = feature_columns
+
+train_data_scaler['target']=train_data['target']
+
+#  特征相关性
+plt.figure(figsize=(20,16))
+column = train_data_scaler.columns
+
+mcorr = train_data_scaler[column].corr(method='spearman')  # 相关性
+
+# 特征降维 (相关性筛选)
+mcorr = mcorr.abs()
+numerical_corr = mcorr[mcorr['target']>0.1]['target']   # 筛选>0.1的特征变量, 并只显示特征变量
+numerical_corr.sort_values(ascending=False)  # 从大到小排序
+
+#  PCA 处理    （除去数据的多重共线性）
+from sklearn.decomposition import PCA
+
+pca = PCA(n_components=0.9)   # 保持90%的信息
+
+new_train_pca = pca.fit_transform(train_data_scaler.iloc[:,0:-1])
+new_test_pca = pca.fit_transform(test_data_scaler)
+
+pca = PCA(n_components=16)
+new_train_pca_16 = pca.fit_transform(train_data_scaler.iloc[:,0:-1])
+new_train_pca_16 = pd.DataFrame(new_train_pca_16)
+new_test_pca_16 = pca.fit_transform(test_data_scaler)
+new_test_pca_16 = pd.DataFrame(new_test_pca_16)
+new_train_pca_16['target']=train_data_scaler['target']
+
+# 用PCA保留16维特征数据
+new_train_pca_16 = new_train_pca_16.fillna(0)
+train = new_train_pca_16[new_test_pca_16.columns]
+target = train_data['target']
+
+# 划分数据
+train_data,test_data,train_target, test_target = train_test_split(train,target, test_size=0.2, random_state=0)
+
+# 多元线性回归
+clf = LinearRegression()
+clf.fit(train_data, train_target)
+mse = mean_absolute_error(test_target, clf.predict(test_data))
+linear_predict = clf.predict(test_data)
+
+# LGB模型回归
+clf2 = lgb.LGBMRegressor(learning_rate=0.01,
+                       max_depth=-1,
+                       n_estimators=5000,
+                       boosting_type='gbdt',
+                       random_state=2022,
+                       objective='regression')
+clf2.fit(X=train_data, y=train_target,eval_metric='MSE',verbose=50)
+mse2 = mean_absolute_error(test_target, clf2.predict(test_data))
+LGB_predict = clf2.predict(test_data)
+
+# 随机森林回归
+clf = RandomForestRegressor(n_estimators=400)
+clf.fit(train_data,train_target)
+mse3 = mean_absolute_error(test_target, clf.predict(test_data))
+
+print('多元线性回归的测试集的MSE得分为：{}'.format(mse))
+print('LGB模型回归的测试集的MSE得分为：{}'.format(mse2))
+print('随机森林回归的测试集的MSE得分为：{}'.format(mse3))
+
+#使用数据训练随机森林模型，采用网格搜索方法调参
+from sklearn.model_selection import GridSearchCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+
+train_data, test_data, train_target, test_target = train_test_split(train, target, test_size=0.2, random_state=0)
+randomForestRegression = RandomForestRegressor()
+parameters = {'n_estimators':[50,100,200], 'max_depth':[1,2,3]}
+clf = GridSearchCV(randomForestRegression, parameters, cv=5)
+clf.fit(train_data, train_target)
+score_test = mean_squared_error(test_target, clf.predict(test_data))
+
+print('调参后的随机森林回归的训练集得分：{}'.format(clf.score(train_data,train_target)))
+print('调参后的随机森林回归的测试集得分：{}'.format(clf.score(test_data,test_target)))
+print("随机森林模型调参前MSE：{}".format(mse))
+print("随机森林模型调参后MSE：{}".format(score_test))
+
+# 使用数据训练随机森林模型，采用随机参数优化方法调参
+from sklearn.model_selection import RandomizedSearchCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+
+train_data, test_data, train_target, test_target =train_test_split(train, target, test_size=0.2, random_state=0)
+randomForestRegressior = RandomForestRegressor()
+parameters = {'n_estimators':[50, 100, 200, 300], 'max_depth':[1,2,3,4,5]}
+clf = RandomizedSearchCV(randomForestRegressior, parameters, cv=5)
+clf.fit(train_data, train_target)
+score_test = mean_squared_error(test_target, clf.predict(test_data))
+
+print('调参后的随机森林回归的训练集得分：{}'.format(clf.score(train_data,train_target)))
+print('调参后的随机森林回归的测试集得分：{}'.format(clf.score(test_data,test_target)))
+print("随机森林模型调参前MSE：{}".format(mse))
+print("随机森林模型调参后MSE：{}".format(score_test))
+
+# lgb模型调参
+clf = lgb.LGBMRegressor(num_leaves=31)
+parameters = {'learning_rate':[0.01,0.1,1],'n_estimators':[20,40]}
+clf= GridSearchCV(clf, parameters, cv=5)
+clf.fit(train_data, train_target)
+score_test = mean_squared_error(test_target, clf.predict(test_data))
+RandomForest_predict = clf.predict(test_data)
+
+print('调参后的LGB的训练集得分：{}'.format(clf.score(train_data,train_target)))
+print('调参后的LGB的测试集得分：{}'.format(clf.score(test_data,test_target)))
+print("LGB模型调参前MSE：{}".format(mse))
+print("LGB模型调参后MSE：{}".format(score_test))
+
+# 3个模型融合
+def model_mix(pred_1, pred_2, pred_3):
+    result = pd.DataFrame(columns=['多元线性回归', 'LGB模型回归', '随机森林回归', '融合MSE'])
+
+    for a in range(40):
+        for b in range(40):
+            for c in range(1,40):
+                test_pred = (a * pred_1 + b * pred_2 + c * pred_3) / (a + b + c)
+
+                mse = mean_squared_error(test_target, test_pred)
+
+                result = result.append([{'多元线性回归': a,
+                                         'LGB模型回归': b,
+                                         '随机森林回归': c,
+                                         '融合MSE': mse}],
+                                       ignore_index=True)
+    return result
+
+
+model_combine = model_mix(linear_predict, LGB_predict, RandomForest_predict)
+
+model_combine.sort_values(by='融合MSE', inplace=True)
+print(model_combine.head())
+model_combine.to_csv('result.csv',index=0)
